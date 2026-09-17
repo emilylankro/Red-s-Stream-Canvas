@@ -3,7 +3,6 @@
 #include "GraphicsDevice.h"
 
 #include <algorithm>
-#include <cmath>
 #include <d2d1_1helper.h>
 
 using Microsoft::WRL::ComPtr;
@@ -19,6 +18,7 @@ CanvasRenderer::CanvasRenderer(std::shared_ptr<GraphicsDevice> graphics, HWND hw
 
     CreateSwapChain();
     CreateTargetBitmap();
+    CreateEditorResources();
 }
 
 void CanvasRenderer::CreateSwapChain() {
@@ -69,6 +69,18 @@ void CanvasRenderer::CreateTargetBitmap() {
     m_d2dContext->SetTarget(m_targetBitmap.Get());
 }
 
+void CanvasRenderer::CreateEditorResources() {
+    winrt::check_hresult(m_d2dContext->CreateSolidColorBrush(
+        D2D1::ColorF(0.20f, 0.70f, 1.00f, 1.0f),
+        &m_selectionBrush));
+    winrt::check_hresult(m_d2dContext->CreateSolidColorBrush(
+        D2D1::ColorF(1.00f, 0.62f, 0.12f, 1.0f),
+        &m_cropBrush));
+    winrt::check_hresult(m_d2dContext->CreateSolidColorBrush(
+        D2D1::ColorF(D2D1::ColorF::White),
+        &m_handleFillBrush));
+}
+
 void CanvasRenderer::Resize(uint32_t width, uint32_t height) {
     if (!m_swapChain || width == 0 || height == 0 || (width == m_width && height == m_height)) {
         return;
@@ -90,24 +102,12 @@ void CanvasRenderer::Resize(uint32_t width, uint32_t height) {
     CreateTargetBitmap();
 }
 
-D2D1_RECT_F CanvasRenderer::FitRect(
-    float cellX,
-    float cellY,
-    float cellW,
-    float cellH,
-    float sourceW,
-    float sourceH) const {
-
-    if (sourceW <= 0 || sourceH <= 0) {
-        return D2D1::RectF(cellX, cellY, cellX + cellW, cellY + cellH);
-    }
-
-    const float scale = std::min(cellW / sourceW, cellH / sourceH);
-    const float w = sourceW * scale;
-    const float h = sourceH * scale;
-    const float x = cellX + (cellW - w) * 0.5f;
-    const float y = cellY + (cellH - h) * 0.5f;
-    return D2D1::RectF(x, y, x + w, y + h);
+D2D1_RECT_F CanvasRenderer::DestinationRect(const CanvasTransform& transform) const {
+    return D2D1::RectF(
+        transform.x * static_cast<float>(m_width),
+        transform.y * static_cast<float>(m_height),
+        (transform.x + transform.width) * static_cast<float>(m_width),
+        (transform.y + transform.height) * static_cast<float>(m_height));
 }
 
 void CanvasRenderer::SetFixedFps(uint32_t fps) noexcept {
@@ -127,8 +127,6 @@ void CanvasRenderer::UpdateAdaptivePerformance(double renderMs, size_t sourceCou
     }
 
     const double avg = m_perfAccumulatedMs / static_cast<double>(m_perfSampleCount);
-
-    // Conservative auto mode: only use 60 FPS when composition is very cheap.
     if (m_targetFps == 30 && sourceCount <= 4 && avg < 4.5) {
         m_targetFps = 60;
     } else if (m_targetFps == 60 && avg > 10.0) {
@@ -139,7 +137,39 @@ void CanvasRenderer::UpdateAdaptivePerformance(double renderMs, size_t sourceCou
     m_perfAccumulatedMs = 0.0;
 }
 
-void CanvasRenderer::Render(const std::vector<std::shared_ptr<CaptureSource>>& sources) {
+void CanvasRenderer::DrawSelection(const D2D1_RECT_F& rect, bool cropMode) {
+    ID2D1SolidColorBrush* outline = cropMode ? m_cropBrush.Get() : m_selectionBrush.Get();
+    m_d2dContext->DrawRectangle(rect, outline, 2.0f);
+
+    constexpr float handle = 8.0f;
+    const float half = handle * 0.5f;
+    const float cx = (rect.left + rect.right) * 0.5f;
+    const float cy = (rect.top + rect.bottom) * 0.5f;
+
+    const D2D1_POINT_2F points[] = {
+        D2D1::Point2F(rect.left, rect.top),
+        D2D1::Point2F(cx, rect.top),
+        D2D1::Point2F(rect.right, rect.top),
+        D2D1::Point2F(rect.right, cy),
+        D2D1::Point2F(rect.right, rect.bottom),
+        D2D1::Point2F(cx, rect.bottom),
+        D2D1::Point2F(rect.left, rect.bottom),
+        D2D1::Point2F(rect.left, cy),
+    };
+
+    for (const auto& point : points) {
+        const auto box = D2D1::RectF(point.x - half, point.y - half, point.x + half, point.y + half);
+        m_d2dContext->FillRectangle(box, m_handleFillBrush.Get());
+        m_d2dContext->DrawRectangle(box, outline, 1.0f);
+    }
+}
+
+void CanvasRenderer::Render(
+    const std::vector<std::shared_ptr<CaptureSource>>& sources,
+    const CaptureSource* selected,
+    bool editMode,
+    bool cropMode) {
+
     if (!m_swapChain || !m_d2dContext) {
         return;
     }
@@ -149,63 +179,61 @@ void CanvasRenderer::Render(const std::vector<std::shared_ptr<CaptureSource>>& s
     m_d2dContext->BeginDraw();
     m_d2dContext->Clear(D2D1::ColorF(D2D1::ColorF::Black));
 
-    const size_t n = sources.size();
-    if (n > 0) {
-        const uint32_t columns = static_cast<uint32_t>(std::ceil(std::sqrt(static_cast<double>(n))));
-        const uint32_t rows = static_cast<uint32_t>((n + columns - 1) / columns);
-        const float cellW = static_cast<float>(m_width) / static_cast<float>(columns);
-        const float cellH = static_cast<float>(m_height) / static_cast<float>(rows);
+    size_t visibleCount = 0;
+    for (const auto& source : sources) {
+        if (!source || source->IsClosed() || !source->Transform().visible) {
+            continue;
+        }
+        ++visibleCount;
 
-        for (size_t i = 0; i < n; ++i) {
-            const auto& source = sources[i];
-            if (!source || source->IsClosed()) {
+        auto snapshot = source->Snapshot();
+        if (!snapshot.texture || snapshot.width == 0 || snapshot.height == 0) {
+            continue;
+        }
+
+        auto& cache = m_bitmapCache[source.get()];
+        if (!cache.bitmap || cache.generation != snapshot.generation) {
+            ComPtr<IDXGISurface> surface;
+            if (FAILED(snapshot.texture.As(&surface))) {
                 continue;
             }
 
-            auto snapshot = source->Snapshot();
-            if (!snapshot.texture || snapshot.width == 0 || snapshot.height == 0) {
+            const auto props = D2D1::BitmapProperties1(
+                D2D1_BITMAP_OPTIONS_NONE,
+                D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_IGNORE));
+
+            ComPtr<ID2D1Bitmap1> bitmap;
+            if (FAILED(m_d2dContext->CreateBitmapFromDxgiSurface(surface.Get(), &props, &bitmap))) {
                 continue;
             }
 
-            auto& cache = m_bitmapCache[source.get()];
-            if (!cache.bitmap || cache.generation != snapshot.generation) {
-                ComPtr<IDXGISurface> surface;
-                if (FAILED(snapshot.texture.As(&surface))) {
-                    continue;
-                }
+            cache.bitmap = std::move(bitmap);
+            cache.generation = snapshot.generation;
+        }
 
-                const auto props = D2D1::BitmapProperties1(
-                    D2D1_BITMAP_OPTIONS_NONE,
-                    D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_IGNORE));
+        const auto& transform = source->Transform();
+        const auto dest = DestinationRect(transform);
 
-                ComPtr<ID2D1Bitmap1> bitmap;
-                if (FAILED(m_d2dContext->CreateBitmapFromDxgiSurface(surface.Get(), &props, &bitmap))) {
-                    continue;
-                }
+        const float sourceW = static_cast<float>(snapshot.width);
+        const float sourceH = static_cast<float>(snapshot.height);
+        const D2D1_RECT_F src = D2D1::RectF(
+            std::clamp(transform.cropLeft, 0.0f, 0.95f) * sourceW,
+            std::clamp(transform.cropTop, 0.0f, 0.95f) * sourceH,
+            (1.0f - std::clamp(transform.cropRight, 0.0f, 0.95f)) * sourceW,
+            (1.0f - std::clamp(transform.cropBottom, 0.0f, 0.95f)) * sourceH);
 
-                cache.bitmap = std::move(bitmap);
-                cache.generation = snapshot.generation;
-            }
-
-            const uint32_t col = static_cast<uint32_t>(i % columns);
-            const uint32_t row = static_cast<uint32_t>(i / columns);
-            const float x = col * cellW;
-            const float y = row * cellH;
-            const auto dest = FitRect(
-                x,
-                y,
-                cellW,
-                cellH,
-                static_cast<float>(snapshot.width),
-                static_cast<float>(snapshot.height));
-
+        if (src.right > src.left && src.bottom > src.top) {
             m_d2dContext->DrawBitmap(
                 cache.bitmap.Get(),
                 dest,
                 1.0f,
                 D2D1_INTERPOLATION_MODE_LINEAR,
-                nullptr);
+                src);
         }
+    }
+
+    if (editMode && selected && selected->Transform().visible && !selected->IsClosed()) {
+        DrawSelection(DestinationRect(selected->Transform()), cropMode);
     }
 
     const HRESULT endHr = m_d2dContext->EndDraw();
@@ -215,7 +243,6 @@ void CanvasRenderer::Render(const std::vector<std::shared_ptr<CaptureSource>>& s
     }
     winrt::check_hresult(endHr);
 
-    // Do not force vsync here. Our lightweight timer controls the output cadence.
     const HRESULT presentHr = m_swapChain->Present(0, 0);
     if (presentHr == DXGI_STATUS_OCCLUDED) {
         return;
@@ -224,5 +251,5 @@ void CanvasRenderer::Render(const std::vector<std::shared_ptr<CaptureSource>>& s
 
     const auto end = std::chrono::steady_clock::now();
     const double renderMs = std::chrono::duration<double, std::milli>(end - begin).count();
-    UpdateAdaptivePerformance(renderMs, sources.size());
+    UpdateAdaptivePerformance(renderMs, visibleCount);
 }
