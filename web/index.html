@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Red's Stream Canvas</title>
+  <meta name="description" content="A lightweight Windows app that combines multiple screens and windows into one output canvas." />
+  <style>
+    :root { color-scheme: dark; font-family: Inter, system-ui, Segoe UI, sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; background: #0b0b0c; color: #f4f4f5; display: grid; place-items: center; }
+    main { width: min(900px, calc(100% - 40px)); padding: 72px 0; }
+    .eyebrow { font-size: 13px; letter-spacing: .14em; text-transform: uppercase; color: #a1a1aa; }
+    h1 { font-size: clamp(44px, 8vw, 86px); line-height: .95; margin: 16px 0 24px; letter-spacing: -.055em; }
+    p { max-width: 650px; font-size: clamp(18px, 2.5vw, 23px); line-height: 1.5; color: #c7c7cc; }
+    .actions { margin-top: 36px; display: flex; gap: 12px; flex-wrap: wrap; }
+    a { display: inline-block; padding: 13px 18px; border: 1px solid #3f3f46; border-radius: 10px; color: white; text-decoration: none; font-weight: 650; }
+    a.primary { background: white; color: black; border-color: white; }
+    .facts { margin-top: 70px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+    .fact { padding-top: 16px; border-top: 1px solid #27272a; color: #a1a1aa; line-height: 1.5; }
+    .fact strong { color: white; display: block; margin-bottom: 4px; }
+    @media (max-width: 650px) { .facts { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="eyebrow">Independent open-source Windows utility</div>
+    <h1>Red's Stream Canvas</h1>
+    <p>Combine multiple monitors and app windows into one lightweight output canvas. No recording. No encoding. No audio mixer. Just capture, compose, and display.</p>
+    <div class="actions">
+      <a class="primary" href="#">Windows release coming soon</a>
+      <a href="https://github.com/emilylankro/Red-s-Stream-Canvas">View source on GitHub</a>
+    </div>
+    <div class="facts">
+      <div class="fact"><strong>GPU composed</strong>Designed to keep screen pixels on the GPU instead of copying them through the CPU.</div>
+      <div class="fact"><strong>Adaptive</strong>Auto performance mode scales output cadence to the machine running it.</div>
+      <div class="fact"><strong>Platform-neutral output</strong>The final canvas is a normal Windows window that other apps can capture.</div>
+    </div>
+  </main>
+</body>
+</html>
