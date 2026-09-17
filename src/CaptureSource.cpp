@@ -85,6 +85,13 @@ void CaptureSource::SetMaxFps(uint32_t fps) noexcept {
     m_maxFps.store(std::clamp(fps, 5u, 60u));
 }
 
+void CaptureSource::ResetCrop() noexcept {
+    m_transform.cropLeft = 0.0f;
+    m_transform.cropTop = 0.0f;
+    m_transform.cropRight = 0.0f;
+    m_transform.cropBottom = 0.0f;
+}
+
 std::wstring CaptureSource::Name() const {
     if (!m_item) {
         return L"Source";
@@ -114,9 +121,7 @@ void CaptureSource::EnsureCopyTexture(ID3D11Texture2D* source, uint32_t width, u
     bool recreate = false;
     {
         std::scoped_lock lock(m_mutex);
-        if (!m_copyTexture || m_width != width || m_height != height) {
-            recreate = true;
-        }
+        recreate = !m_copyTexture || m_width != width || m_height != height;
     }
 
     if (!recreate) {
@@ -157,7 +162,6 @@ void CaptureSource::OnFrameArrived(
     const auto fps = std::max(m_maxFps.load(), 1u);
     const auto minInterval = std::chrono::microseconds(1'000'000 / fps);
     if (m_lastAcceptedFrame.time_since_epoch().count() != 0 && now - m_lastAcceptedFrame < minInterval) {
-        // Drain one frame so the pool stays current, but avoid an unnecessary GPU copy.
         auto skipped = sender.TryGetNextFrame();
         return;
     }
@@ -172,17 +176,20 @@ void CaptureSource::OnFrameArrived(
         return;
     }
 
-    auto access = frame.Surface().as<IDirect3DDxgiInterfaceAccess>();
+    auto access = frame.Surface().as<::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
     ComPtr<ID3D11Texture2D> sourceTexture;
-    winrt::check_hresult(access->GetInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(sourceTexture.GetAddressOf())));
+    winrt::check_hresult(access->GetInterface(
+        __uuidof(ID3D11Texture2D),
+        reinterpret_cast<void**>(sourceTexture.GetAddressOf())));
 
     const auto width = static_cast<uint32_t>(size.Width);
     const auto height = static_cast<uint32_t>(size.Height);
     bool sizeChanged = false;
     {
         std::scoped_lock lock(m_mutex);
-        sizeChanged = (width != m_width || height != m_height);
+        sizeChanged = width != m_width || height != m_height;
     }
+
     EnsureCopyTexture(sourceTexture.Get(), width, height);
 
     ComPtr<ID3D11Texture2D> destination;
