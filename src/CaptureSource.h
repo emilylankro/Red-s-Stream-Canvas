@@ -8,6 +8,7 @@
 
 #include <d3d11_4.h>
 #include <wrl/client.h>
+#include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Graphics.Capture.h>
 #include <winrt/Windows.Graphics.DirectX.Direct3D11.h>
 
@@ -18,6 +19,18 @@ struct CaptureFrameSnapshot {
     uint32_t width{ 0 };
     uint32_t height{ 0 };
     uint64_t generation{ 0 };
+};
+
+struct CanvasTransform {
+    float x{ 0.05f };
+    float y{ 0.05f };
+    float width{ 0.90f };
+    float height{ 0.90f };
+    float cropLeft{ 0.0f };
+    float cropTop{ 0.0f };
+    float cropRight{ 0.0f };
+    float cropBottom{ 0.0f };
+    bool visible{ true };
 };
 
 class CaptureSource : public std::enable_shared_from_this<CaptureSource> {
@@ -34,6 +47,10 @@ public:
     CaptureFrameSnapshot Snapshot() const;
     std::wstring Name() const;
     bool IsClosed() const noexcept { return m_closed.load(); }
+
+    CanvasTransform const& Transform() const noexcept { return m_transform; }
+    CanvasTransform& Transform() noexcept { return m_transform; }
+    void ResetCrop() noexcept;
 
 private:
     void OnFrameArrived(
@@ -58,4 +75,5 @@ private:
     std::atomic<bool> m_stopped{ false };
     std::atomic<uint32_t> m_maxFps{ 30 };
     std::chrono::steady_clock::time_point m_lastAcceptedFrame{};
+    CanvasTransform m_transform{};
 };
