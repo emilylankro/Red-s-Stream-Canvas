@@ -4,6 +4,22 @@
 
 It is intentionally **not** a recorder, encoder, streaming service, or audio mixer. Any application that can capture a normal window can use the output.
 
+## Download
+
+The current public build is **Alpha 0.2 for Windows x64**.
+
+Download it from the GitHub release page:
+
+https://github.com/emilylankro/Red-s-Stream-Canvas/releases/tag/v0.2.0-alpha
+
+Or download the ZIP directly:
+
+https://github.com/emilylankro/Red-s-Stream-Canvas/releases/download/v0.2.0-alpha/RedsStreamCanvas-Alpha-0.2-windows-x64.zip
+
+Extract the ZIP and run `RedsStreamCanvas.exe`.
+
+This alpha is not code-signed yet, so Windows SmartScreen may warn the first time it is launched.
+
 ## Alpha 0.2
 
 Alpha 0.2 adds the first real canvas editor while keeping the renderer GPU-first:
@@ -19,6 +35,7 @@ Alpha 0.2 adds the first real canvas editor while keeping the renderer GPU-first
 - Reset crop for the selected source.
 - Turn **Edit OFF** before streaming to hide all editor handles/guides.
 - Adaptive 30/60 FPS compositor cadence.
+- Self-contained x64 build with the MSVC runtime linked statically.
 
 ### Output-window shortcuts
 
@@ -37,6 +54,15 @@ Alpha 0.2 adds the first real canvas editor while keeping the renderer GPU-first
 4. **Independent product** — no affiliation with VDO.Ninja or any other streaming/capture platform.
 5. **Simple distribution** — GitHub releases for binaries and a static Cloudflare Pages site for project information.
 
+## Use
+
+1. Run `RedsStreamCanvas.exe`.
+2. Click **+ Add screen / window** and pick a monitor or app window.
+3. Add more sources as needed.
+4. Arrange them in **Red's Stream Canvas — Output** or use a preset layout.
+5. Turn **Edit OFF** to remove editor guides.
+6. In your streaming/calling/sharing app, capture **Red's Stream Canvas — Output** as one window.
+
 ## Requirements to build
 
 - Windows 10/11.
@@ -44,7 +70,7 @@ Alpha 0.2 adds the first real canvas editor while keeping the renderer GPU-first
 - Windows SDK with C++/WinRT headers.
 - CMake 3.25+.
 
-The runtime does **not** require Electron, .NET, OBS, FFmpeg, or the Windows App SDK.
+The runtime does **not** require Electron, .NET, OBS, FFmpeg, the Windows App SDK, or a separately installed Visual C++ Redistributable.
 
 ## Build
 
@@ -61,16 +87,7 @@ The executable will be under a path similar to:
 build/Release/RedsStreamCanvas.exe
 ```
 
-GitHub Actions also builds the Windows executable automatically. Open the latest successful **Build Windows** workflow run and download the `RedsStreamCanvas-windows-x64` artifact.
-
-## Use
-
-1. Run `RedsStreamCanvas.exe`.
-2. Click **+ Add screen / window** and pick a monitor or app window.
-3. Add more sources as needed.
-4. Arrange them in **Red's Stream Canvas — Output** or use a preset layout.
-5. Turn **Edit OFF** to remove editor guides.
-6. In your streaming/calling/sharing app, capture **Red's Stream Canvas — Output** as one window.
+GitHub Actions builds the Windows executable automatically on pushes to `main`.
 
 ## Performance design
 
