@@ -7,6 +7,7 @@
 
 #include <windows.h>
 #include <d2d1_3.h>
+#include <d3d11_4.h>
 #include <dxgi1_6.h>
 #include <wrl/client.h>
 
@@ -33,27 +34,43 @@ public:
     uint32_t Height() const noexcept { return m_height; }
 
 private:
-    struct BitmapCacheEntry {
+    struct TextureCacheEntry {
         uint64_t generation{ 0 };
-        Microsoft::WRL::ComPtr<ID2D1Bitmap1> bitmap;
+        Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> view;
+    };
+
+    struct TransformConstants {
+        float destination[4]; // x, y, width, height in normalized canvas coordinates
+        float sourceUv[4];   // left, top, right, bottom
     };
 
     void CreateSwapChain();
-    void CreateTargetBitmap();
+    void CreateBackBufferResources();
+    void CreateTexturePipeline();
     void CreateEditorResources();
     void UpdateAdaptivePerformance(double renderMs, size_t sourceCount);
     D2D1_RECT_F DestinationRect(const CanvasTransform& transform) const;
     void DrawSelection(const D2D1_RECT_F& rect, bool cropMode);
+    bool DrawSource(CaptureSource const& source);
 
     std::shared_ptr<GraphicsDevice> m_graphics;
     HWND m_hwnd{};
+
     Microsoft::WRL::ComPtr<IDXGISwapChain1> m_swapChain;
+    Microsoft::WRL::ComPtr<ID3D11RenderTargetView> m_renderTargetView;
+    Microsoft::WRL::ComPtr<ID3D11VertexShader> m_vertexShader;
+    Microsoft::WRL::ComPtr<ID3D11PixelShader> m_pixelShader;
+    Microsoft::WRL::ComPtr<ID3D11Buffer> m_transformBuffer;
+    Microsoft::WRL::ComPtr<ID3D11SamplerState> m_sampler;
+
     Microsoft::WRL::ComPtr<ID2D1DeviceContext2> m_d2dContext;
     Microsoft::WRL::ComPtr<ID2D1Bitmap1> m_targetBitmap;
     Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_selectionBrush;
     Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_cropBrush;
     Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_handleFillBrush;
-    std::unordered_map<const CaptureSource*, BitmapCacheEntry> m_bitmapCache;
+
+    std::unordered_map<const CaptureSource*, TextureCacheEntry> m_textureCache;
+
     uint32_t m_width{ 1280 };
     uint32_t m_height{ 720 };
     uint32_t m_targetFps{ 30 };
