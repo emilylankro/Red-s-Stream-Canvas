@@ -47,6 +47,7 @@ public:
     CaptureFrameSnapshot Snapshot() const;
     std::wstring Name() const;
     bool IsClosed() const noexcept { return m_closed.load(); }
+    uint64_t FrameCount() const noexcept { return m_frameCount.load(std::memory_order_relaxed); }
 
     CanvasTransform const& Transform() const noexcept { return m_transform; }
     CanvasTransform& Transform() noexcept { return m_transform; }
@@ -74,6 +75,7 @@ private:
     std::atomic<bool> m_started{ false };
     std::atomic<bool> m_stopped{ false };
     std::atomic<uint32_t> m_maxFps{ 30 };
+    std::atomic<uint64_t> m_frameCount{ 0 };
     std::chrono::steady_clock::time_point m_lastAcceptedFrame{};
     CanvasTransform m_transform{};
 };
