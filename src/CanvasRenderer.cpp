@@ -3,9 +3,72 @@
 #include "GraphicsDevice.h"
 
 #include <algorithm>
+#include <cstring>
 #include <d2d1_1helper.h>
+#include <d3dcompiler.h>
 
 using Microsoft::WRL::ComPtr;
+
+namespace {
+constexpr char VertexShaderSource[] = R"(
+cbuffer TransformBuffer : register(b0)
+{
+    float4 destination;
+    float4 sourceUv;
+};
+
+struct VSOutput
+{
+    float4 position : SV_POSITION;
+    float2 uv : TEXCOORD0;
+};
+
+VSOutput main(uint vertexId : SV_VertexID)
+{
+    float2 corner = float2(vertexId & 1, (vertexId >> 1) & 1);
+    float2 canvas = destination.xy + corner * destination.zw;
+
+    VSOutput output;
+    output.position = float4(canvas.x * 2.0f - 1.0f, 1.0f - canvas.y * 2.0f, 0.0f, 1.0f);
+    output.uv = lerp(sourceUv.xy, sourceUv.zw, corner);
+    return output;
+}
+)";
+
+constexpr char PixelShaderSource[] = R"(
+Texture2D sourceTexture : register(t0);
+SamplerState sourceSampler : register(s0);
+
+float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET
+{
+    float4 color = sourceTexture.Sample(sourceSampler, uv);
+    return float4(color.rgb, 1.0f);
+}
+)";
+
+ComPtr<ID3DBlob> CompileShader(const char* source, const char* target) {
+    ComPtr<ID3DBlob> shader;
+    ComPtr<ID3DBlob> errors;
+    const HRESULT hr = D3DCompile(
+        source,
+        std::strlen(source),
+        nullptr,
+        nullptr,
+        nullptr,
+        "main",
+        target,
+        D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL3,
+        0,
+        &shader,
+        &errors);
+
+    if (FAILED(hr) && errors) {
+        OutputDebugStringA(static_cast<const char*>(errors->GetBufferPointer()));
+    }
+    winrt::check_hresult(hr);
+    return shader;
+}
+}
 
 CanvasRenderer::CanvasRenderer(std::shared_ptr<GraphicsDevice> graphics, HWND hwnd)
     : m_graphics(std::move(graphics)), m_hwnd(hwnd) {
@@ -17,7 +80,8 @@ CanvasRenderer::CanvasRenderer(std::shared_ptr<GraphicsDevice> graphics, HWND hw
     winrt::check_hresult(baseContext.As(&m_d2dContext));
 
     CreateSwapChain();
-    CreateTargetBitmap();
+    CreateBackBufferResources();
+    CreateTexturePipeline();
     CreateEditorResources();
 }
 
@@ -50,12 +114,20 @@ void CanvasRenderer::CreateSwapChain() {
     factory->MakeWindowAssociation(m_hwnd, DXGI_MWA_NO_ALT_ENTER);
 }
 
-void CanvasRenderer::CreateTargetBitmap() {
-    m_targetBitmap.Reset();
+void CanvasRenderer::CreateBackBufferResources() {
     m_d2dContext->SetTarget(nullptr);
+    m_targetBitmap.Reset();
+    m_renderTargetView.Reset();
+
+    ComPtr<ID3D11Texture2D> backBuffer;
+    winrt::check_hresult(m_swapChain->GetBuffer(0, IID_PPV_ARGS(&backBuffer)));
+    winrt::check_hresult(m_graphics->D3DDevice()->CreateRenderTargetView(
+        backBuffer.Get(),
+        nullptr,
+        &m_renderTargetView));
 
     ComPtr<IDXGISurface> surface;
-    winrt::check_hresult(m_swapChain->GetBuffer(0, IID_PPV_ARGS(&surface)));
+    winrt::check_hresult(backBuffer.As(&surface));
 
     const auto props = D2D1::BitmapProperties1(
         D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
@@ -65,8 +137,46 @@ void CanvasRenderer::CreateTargetBitmap() {
         surface.Get(),
         &props,
         &m_targetBitmap));
-
     m_d2dContext->SetTarget(m_targetBitmap.Get());
+}
+
+void CanvasRenderer::CreateTexturePipeline() {
+    auto vertexBlob = CompileShader(VertexShaderSource, "vs_4_0");
+    auto pixelBlob = CompileShader(PixelShaderSource, "ps_4_0");
+
+    winrt::check_hresult(m_graphics->D3DDevice()->CreateVertexShader(
+        vertexBlob->GetBufferPointer(),
+        vertexBlob->GetBufferSize(),
+        nullptr,
+        &m_vertexShader));
+
+    winrt::check_hresult(m_graphics->D3DDevice()->CreatePixelShader(
+        pixelBlob->GetBufferPointer(),
+        pixelBlob->GetBufferSize(),
+        nullptr,
+        &m_pixelShader));
+
+    D3D11_BUFFER_DESC bufferDesc{};
+    bufferDesc.ByteWidth = sizeof(TransformConstants);
+    bufferDesc.Usage = D3D11_USAGE_DYNAMIC;
+    bufferDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    bufferDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+    winrt::check_hresult(m_graphics->D3DDevice()->CreateBuffer(
+        &bufferDesc,
+        nullptr,
+        &m_transformBuffer));
+
+    D3D11_SAMPLER_DESC samplerDesc{};
+    samplerDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+    samplerDesc.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
+    samplerDesc.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
+    samplerDesc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+    samplerDesc.ComparisonFunc = D3D11_COMPARISON_NEVER;
+    samplerDesc.MinLOD = 0.0f;
+    samplerDesc.MaxLOD = D3D11_FLOAT32_MAX;
+    winrt::check_hresult(m_graphics->D3DDevice()->CreateSamplerState(
+        &samplerDesc,
+        &m_sampler));
 }
 
 void CanvasRenderer::CreateEditorResources() {
@@ -90,7 +200,7 @@ void CanvasRenderer::Resize(uint32_t width, uint32_t height) {
     m_height = height;
     m_d2dContext->SetTarget(nullptr);
     m_targetBitmap.Reset();
-    m_bitmapCache.clear();
+    m_renderTargetView.Reset();
 
     winrt::check_hresult(m_swapChain->ResizeBuffers(
         0,
@@ -99,7 +209,7 @@ void CanvasRenderer::Resize(uint32_t width, uint32_t height) {
         DXGI_FORMAT_UNKNOWN,
         0));
 
-    CreateTargetBitmap();
+    CreateBackBufferResources();
 }
 
 D2D1_RECT_F CanvasRenderer::DestinationRect(const CanvasTransform& transform) const {
@@ -164,20 +274,96 @@ void CanvasRenderer::DrawSelection(const D2D1_RECT_F& rect, bool cropMode) {
     }
 }
 
+bool CanvasRenderer::DrawSource(CaptureSource const& source) {
+    auto snapshot = source.Snapshot();
+    if (!snapshot.texture || snapshot.width == 0 || snapshot.height == 0) {
+        return false;
+    }
+
+    auto& cache = m_textureCache[&source];
+    if (!cache.view || cache.generation != snapshot.generation) {
+        ComPtr<ID3D11ShaderResourceView> view;
+        if (FAILED(m_graphics->D3DDevice()->CreateShaderResourceView(
+            snapshot.texture.Get(),
+            nullptr,
+            &view))) {
+            return false;
+        }
+        cache.view = std::move(view);
+        cache.generation = snapshot.generation;
+    }
+
+    const auto& transform = source.Transform();
+    TransformConstants constants{};
+    constants.destination[0] = transform.x;
+    constants.destination[1] = transform.y;
+    constants.destination[2] = transform.width;
+    constants.destination[3] = transform.height;
+    constants.sourceUv[0] = std::clamp(transform.cropLeft, 0.0f, 0.95f);
+    constants.sourceUv[1] = std::clamp(transform.cropTop, 0.0f, 0.95f);
+    constants.sourceUv[2] = 1.0f - std::clamp(transform.cropRight, 0.0f, 0.95f);
+    constants.sourceUv[3] = 1.0f - std::clamp(transform.cropBottom, 0.0f, 0.95f);
+
+    if (constants.sourceUv[2] <= constants.sourceUv[0] ||
+        constants.sourceUv[3] <= constants.sourceUv[1]) {
+        return false;
+    }
+
+    auto* context = m_graphics->D3DContext();
+    D3D11_MAPPED_SUBRESOURCE mapped{};
+    if (FAILED(context->Map(
+        m_transformBuffer.Get(),
+        0,
+        D3D11_MAP_WRITE_DISCARD,
+        0,
+        &mapped))) {
+        return false;
+    }
+    std::memcpy(mapped.pData, &constants, sizeof(constants));
+    context->Unmap(m_transformBuffer.Get(), 0);
+
+    ID3D11Buffer* constantBuffer = m_transformBuffer.Get();
+    context->VSSetConstantBuffers(0, 1, &constantBuffer);
+
+    ID3D11ShaderResourceView* sourceView = cache.view.Get();
+    context->PSSetShaderResources(0, 1, &sourceView);
+    context->Draw(4, 0);
+    return true;
+}
+
 void CanvasRenderer::Render(
     const std::vector<std::shared_ptr<CaptureSource>>& sources,
     const CaptureSource* selected,
     bool editMode,
     bool cropMode) {
 
-    if (!m_swapChain || !m_d2dContext) {
+    if (!m_swapChain || !m_renderTargetView) {
         return;
     }
 
     const auto begin = std::chrono::steady_clock::now();
+    auto* context = m_graphics->D3DContext();
 
-    m_d2dContext->BeginDraw();
-    m_d2dContext->Clear(D2D1::ColorF(D2D1::ColorF::Black));
+    ID3D11RenderTargetView* renderTarget = m_renderTargetView.Get();
+    context->OMSetRenderTargets(1, &renderTarget, nullptr);
+
+    const float clearColor[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
+    context->ClearRenderTargetView(m_renderTargetView.Get(), clearColor);
+
+    D3D11_VIEWPORT viewport{};
+    viewport.Width = static_cast<float>(m_width);
+    viewport.Height = static_cast<float>(m_height);
+    viewport.MinDepth = 0.0f;
+    viewport.MaxDepth = 1.0f;
+    context->RSSetViewports(1, &viewport);
+
+    context->IASetInputLayout(nullptr);
+    context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+    context->VSSetShader(m_vertexShader.Get(), nullptr, 0);
+    context->PSSetShader(m_pixelShader.Get(), nullptr, 0);
+
+    ID3D11SamplerState* sampler = m_sampler.Get();
+    context->PSSetSamplers(0, 1, &sampler);
 
     size_t visibleCount = 0;
     for (const auto& source : sources) {
@@ -185,65 +371,25 @@ void CanvasRenderer::Render(
             continue;
         }
         ++visibleCount;
-
-        auto snapshot = source->Snapshot();
-        if (!snapshot.texture || snapshot.width == 0 || snapshot.height == 0) {
-            continue;
-        }
-
-        auto& cache = m_bitmapCache[source.get()];
-        if (!cache.bitmap || cache.generation != snapshot.generation) {
-            ComPtr<IDXGISurface> surface;
-            if (FAILED(snapshot.texture.As(&surface))) {
-                continue;
-            }
-
-            // Let Direct2D inherit the DXGI surface's format/bind flags rather
-            // than forcing bitmap properties. This is more tolerant across
-            // Windows 10 graphics drivers and hybrid-GPU systems.
-            ComPtr<ID2D1Bitmap1> bitmap;
-            if (FAILED(m_d2dContext->CreateBitmapFromDxgiSurface(
-                surface.Get(),
-                nullptr,
-                &bitmap))) {
-                continue;
-            }
-
-            cache.bitmap = std::move(bitmap);
-            cache.generation = snapshot.generation;
-        }
-
-        const auto& transform = source->Transform();
-        const auto dest = DestinationRect(transform);
-
-        const float sourceW = static_cast<float>(snapshot.width);
-        const float sourceH = static_cast<float>(snapshot.height);
-        const D2D1_RECT_F src = D2D1::RectF(
-            std::clamp(transform.cropLeft, 0.0f, 0.95f) * sourceW,
-            std::clamp(transform.cropTop, 0.0f, 0.95f) * sourceH,
-            (1.0f - std::clamp(transform.cropRight, 0.0f, 0.95f)) * sourceW,
-            (1.0f - std::clamp(transform.cropBottom, 0.0f, 0.95f)) * sourceH);
-
-        if (src.right > src.left && src.bottom > src.top) {
-            m_d2dContext->DrawBitmap(
-                cache.bitmap.Get(),
-                dest,
-                1.0f,
-                D2D1_INTERPOLATION_MODE_LINEAR,
-                src);
-        }
+        DrawSource(*source);
     }
+
+    ID3D11ShaderResourceView* nullView = nullptr;
+    context->PSSetShaderResources(0, 1, &nullView);
 
     if (editMode && selected && selected->Transform().visible && !selected->IsClosed()) {
+        // D3D and Direct2D share the same back buffer. Flush only while editing;
+        // the clean output path stays entirely in D3D for minimum overhead.
+        context->Flush();
+        m_d2dContext->BeginDraw();
         DrawSelection(DestinationRect(selected->Transform()), cropMode);
+        const HRESULT endHr = m_d2dContext->EndDraw();
+        if (endHr == D2DERR_RECREATE_TARGET) {
+            CreateBackBufferResources();
+            return;
+        }
+        winrt::check_hresult(endHr);
     }
-
-    const HRESULT endHr = m_d2dContext->EndDraw();
-    if (endHr == D2DERR_RECREATE_TARGET) {
-        CreateTargetBitmap();
-        return;
-    }
-    winrt::check_hresult(endHr);
 
     const HRESULT presentHr = m_swapChain->Present(0, 0);
     if (presentHr == DXGI_STATUS_OCCLUDED) {
