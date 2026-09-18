@@ -5,6 +5,12 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Keep releases self-contained: link the MSVC C/C++ runtime statically so
+# users do not need to install the Visual C++ Redistributable separately.
+if(MSVC)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+
 add_executable(RedsStreamCanvas WIN32
     src/main.cpp
     src/App.cpp
