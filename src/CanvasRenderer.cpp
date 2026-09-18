@@ -6,6 +6,7 @@
 #include <cstring>
 #include <d2d1_1helper.h>
 #include <d3dcompiler.h>
+#include <string>
 
 using Microsoft::WRL::ComPtr;
 
@@ -247,6 +248,26 @@ void CanvasRenderer::UpdateAdaptivePerformance(double renderMs, size_t sourceCou
     m_perfAccumulatedMs = 0.0;
 }
 
+void CanvasRenderer::UpdateCaptureDiagnostic(const std::vector<std::shared_ptr<CaptureSource>>& sources) {
+    const auto now = std::chrono::steady_clock::now();
+    if (m_lastDiagnosticUpdate.time_since_epoch().count() != 0 &&
+        now - m_lastDiagnosticUpdate < std::chrono::seconds(1)) {
+        return;
+    }
+    m_lastDiagnosticUpdate = now;
+
+    uint64_t totalFrames = 0;
+    for (const auto& source : sources) {
+        if (source) {
+            totalFrames += source->FrameCount();
+        }
+    }
+
+    const std::wstring title = L"Red's Stream Canvas - Output | Capture frames: " +
+        std::to_wstring(totalFrames) + L" | Sources: " + std::to_wstring(sources.size());
+    SetWindowTextW(m_hwnd, title.c_str());
+}
+
 void CanvasRenderer::DrawSelection(const D2D1_RECT_F& rect, bool cropMode) {
     ID2D1SolidColorBrush* outline = cropMode ? m_cropBrush.Get() : m_selectionBrush.Get();
     m_d2dContext->DrawRectangle(rect, outline, 2.0f);
@@ -378,8 +399,6 @@ void CanvasRenderer::Render(
     context->PSSetShaderResources(0, 1, &nullView);
 
     if (editMode && selected && selected->Transform().visible && !selected->IsClosed()) {
-        // D3D and Direct2D share the same back buffer. Flush only while editing;
-        // the clean output path stays entirely in D3D for minimum overhead.
         context->Flush();
         m_d2dContext->BeginDraw();
         DrawSelection(DestinationRect(selected->Transform()), cropMode);
@@ -390,6 +409,8 @@ void CanvasRenderer::Render(
         }
         winrt::check_hresult(endHr);
     }
+
+    UpdateCaptureDiagnostic(sources);
 
     const HRESULT presentHr = m_swapChain->Present(0, 0);
     if (presentHr == DXGI_STATUS_OCCLUDED) {
