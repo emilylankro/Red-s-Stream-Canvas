@@ -40,8 +40,8 @@ private:
     };
 
     struct TransformConstants {
-        float destination[4]; // x, y, width, height in normalized canvas coordinates
-        float sourceUv[4];   // left, top, right, bottom
+        float destination[4];
+        float sourceUv[4];
     };
 
     void CreateSwapChain();
@@ -49,6 +49,7 @@ private:
     void CreateTexturePipeline();
     void CreateEditorResources();
     void UpdateAdaptivePerformance(double renderMs, size_t sourceCount);
+    void UpdateCaptureDiagnostic(const std::vector<std::shared_ptr<CaptureSource>>& sources);
     D2D1_RECT_F DestinationRect(const CanvasTransform& transform) const;
     void DrawSelection(const D2D1_RECT_F& rect, bool cropMode);
     bool DrawSource(CaptureSource const& source);
@@ -77,4 +78,5 @@ private:
     bool m_autoPerformance{ true };
     uint32_t m_perfSampleCount{ 0 };
     double m_perfAccumulatedMs{ 0.0 };
+    std::chrono::steady_clock::time_point m_lastDiagnosticUpdate{};
 };
