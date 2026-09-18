@@ -128,8 +128,6 @@ void CaptureSource::EnsureCopyTexture(ID3D11Texture2D* source, uint32_t width, u
         return;
     }
 
-    // Keep the capture format, but create a normal GPU texture that Direct2D can
-    // sample from. Keeping this on the same D3D device avoids CPU readback.
     D3D11_TEXTURE2D_DESC desc{};
     desc.Width = width;
     desc.Height = height;
@@ -207,13 +205,10 @@ void CaptureSource::OnFrameArrived(
         }
 
         if (destination) {
-            // Copy while the WGC frame is still checked out, then explicitly
-            // submit the copy before Direct2D samples the destination texture.
-            // This fixes black/stale frames seen on some Windows 10 + hybrid-GPU
-            // systems without introducing a CPU pixel copy.
             m_graphics->D3DContext()->CopyResource(destination.Get(), sourceTexture.Get());
             m_graphics->D3DContext()->Flush();
             m_lastAcceptedFrame = now;
+            m_frameCount.fetch_add(1, std::memory_order_relaxed);
         }
 
         frame.Close();
