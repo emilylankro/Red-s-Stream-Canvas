@@ -26,6 +26,7 @@ target_compile_options(RedsStreamCanvas PRIVATE /W4 /permissive- /EHsc)
 
 target_link_libraries(RedsStreamCanvas PRIVATE
     d3d11
+    d3dcompiler
     dxgi
     d2d1
     dwrite
