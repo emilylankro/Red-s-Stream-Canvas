@@ -128,17 +128,20 @@ void CaptureSource::EnsureCopyTexture(ID3D11Texture2D* source, uint32_t width, u
         return;
     }
 
-    D3D11_TEXTURE2D_DESC desc = sourceDesc;
+    // Keep the capture format, but create a normal GPU texture that Direct2D can
+    // sample from. Keeping this on the same D3D device avoids CPU readback.
+    D3D11_TEXTURE2D_DESC desc{};
     desc.Width = width;
     desc.Height = height;
     desc.MipLevels = 1;
     desc.ArraySize = 1;
+    desc.Format = sourceDesc.Format;
     desc.SampleDesc.Count = 1;
     desc.SampleDesc.Quality = 0;
     desc.Usage = D3D11_USAGE_DEFAULT;
+    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
     desc.CPUAccessFlags = 0;
     desc.MiscFlags = 0;
-    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
 
     ComPtr<ID3D11Texture2D> newTexture;
     winrt::check_hresult(m_graphics->D3DDevice()->CreateTexture2D(&desc, nullptr, &newTexture));
@@ -158,57 +161,74 @@ void CaptureSource::OnFrameArrived(
         return;
     }
 
-    const auto now = std::chrono::steady_clock::now();
-    const auto fps = std::max(m_maxFps.load(), 1u);
-    const auto minInterval = std::chrono::microseconds(1'000'000 / fps);
-    if (m_lastAcceptedFrame.time_since_epoch().count() != 0 && now - m_lastAcceptedFrame < minInterval) {
-        auto skipped = sender.TryGetNextFrame();
-        return;
-    }
+    try {
+        const auto now = std::chrono::steady_clock::now();
+        const auto fps = std::max(m_maxFps.load(), 1u);
+        const auto minInterval = std::chrono::microseconds(1'000'000 / fps);
+        if (m_lastAcceptedFrame.time_since_epoch().count() != 0 && now - m_lastAcceptedFrame < minInterval) {
+            auto skipped = sender.TryGetNextFrame();
+            if (skipped) {
+                skipped.Close();
+            }
+            return;
+        }
 
-    auto frame = sender.TryGetNextFrame();
-    if (!frame) {
-        return;
-    }
+        auto frame = sender.TryGetNextFrame();
+        if (!frame) {
+            return;
+        }
 
-    const auto size = frame.ContentSize();
-    if (size.Width <= 0 || size.Height <= 0) {
-        return;
-    }
+        const auto size = frame.ContentSize();
+        if (size.Width <= 0 || size.Height <= 0) {
+            frame.Close();
+            return;
+        }
 
-    auto access = frame.Surface().as<::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
-    ComPtr<ID3D11Texture2D> sourceTexture;
-    winrt::check_hresult(access->GetInterface(
-        __uuidof(ID3D11Texture2D),
-        reinterpret_cast<void**>(sourceTexture.GetAddressOf())));
+        auto access = frame.Surface().as<::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
+        ComPtr<ID3D11Texture2D> sourceTexture;
+        winrt::check_hresult(access->GetInterface(
+            __uuidof(ID3D11Texture2D),
+            reinterpret_cast<void**>(sourceTexture.GetAddressOf())));
 
-    const auto width = static_cast<uint32_t>(size.Width);
-    const auto height = static_cast<uint32_t>(size.Height);
-    bool sizeChanged = false;
-    {
-        std::scoped_lock lock(m_mutex);
-        sizeChanged = width != m_width || height != m_height;
-    }
+        const auto width = static_cast<uint32_t>(size.Width);
+        const auto height = static_cast<uint32_t>(size.Height);
+        bool sizeChanged = false;
+        {
+            std::scoped_lock lock(m_mutex);
+            sizeChanged = width != m_width || height != m_height;
+        }
 
-    EnsureCopyTexture(sourceTexture.Get(), width, height);
+        EnsureCopyTexture(sourceTexture.Get(), width, height);
 
-    ComPtr<ID3D11Texture2D> destination;
-    {
-        std::scoped_lock lock(m_mutex);
-        destination = m_copyTexture;
-    }
+        ComPtr<ID3D11Texture2D> destination;
+        {
+            std::scoped_lock lock(m_mutex);
+            destination = m_copyTexture;
+        }
 
-    if (destination) {
-        m_graphics->D3DContext()->CopyResource(destination.Get(), sourceTexture.Get());
-        m_lastAcceptedFrame = now;
-    }
+        if (destination) {
+            // Copy while the WGC frame is still checked out, then explicitly
+            // submit the copy before Direct2D samples the destination texture.
+            // This fixes black/stale frames seen on some Windows 10 + hybrid-GPU
+            // systems without introducing a CPU pixel copy.
+            m_graphics->D3DContext()->CopyResource(destination.Get(), sourceTexture.Get());
+            m_graphics->D3DContext()->Flush();
+            m_lastAcceptedFrame = now;
+        }
 
-    if (sizeChanged) {
         frame.Close();
-        sender.Recreate(
-            m_graphics->WinRtDevice(),
-            DirectXPixelFormat::B8G8R8A8UIntNormalized,
-            2,
-            size);
+
+        if (sizeChanged) {
+            sender.Recreate(
+                m_graphics->WinRtDevice(),
+                DirectXPixelFormat::B8G8R8A8UIntNormalized,
+                2,
+                size);
+        }
+    } catch (const winrt::hresult_error&) {
+        // A transient graphics error should not tear down the free-threaded
+        // capture callback. The next frame gets another chance to recover.
+    } catch (...) {
+        // Keep the capture session alive on unexpected per-frame failures.
     }
 }
