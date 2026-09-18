@@ -198,12 +198,14 @@ void CanvasRenderer::Render(
                 continue;
             }
 
-            const auto props = D2D1::BitmapProperties1(
-                D2D1_BITMAP_OPTIONS_NONE,
-                D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_IGNORE));
-
+            // Let Direct2D inherit the DXGI surface's format/bind flags rather
+            // than forcing bitmap properties. This is more tolerant across
+            // Windows 10 graphics drivers and hybrid-GPU systems.
             ComPtr<ID2D1Bitmap1> bitmap;
-            if (FAILED(m_d2dContext->CreateBitmapFromDxgiSurface(surface.Get(), &props, &bitmap))) {
+            if (FAILED(m_d2dContext->CreateBitmapFromDxgiSurface(
+                surface.Get(),
+                nullptr,
+                &bitmap))) {
                 continue;
             }
 
