@@ -6,14 +6,12 @@
 #include <vector>
 
 #include <windows.h>
-#include <d2d1_3.h>
 #include <d3d11_4.h>
 #include <dxgi1_6.h>
 #include <wrl/client.h>
 
 class GraphicsDevice;
 class CaptureSource;
-struct CanvasTransform;
 
 class CanvasRenderer {
 public:
@@ -44,15 +42,21 @@ private:
         float sourceUv[4];
     };
 
+    struct ColorConstants {
+        float color[4];
+    };
+
     void CreateSwapChain();
     void CreateBackBufferResources();
-    void CreateTexturePipeline();
-    void CreateEditorResources();
+    void CreatePipeline();
     void UpdateAdaptivePerformance(double renderMs, size_t sourceCount);
     void UpdateCaptureDiagnostic(const std::vector<std::shared_ptr<CaptureSource>>& sources);
-    D2D1_RECT_F DestinationRect(const CanvasTransform& transform) const;
-    void DrawSelection(const D2D1_RECT_F& rect, bool cropMode);
+
+    void SetTransform(float x, float y, float width, float height,
+        float u0 = 0.0f, float v0 = 0.0f, float u1 = 1.0f, float v1 = 1.0f);
     bool DrawSource(CaptureSource const& source);
+    void DrawSolidRect(float x, float y, float width, float height, const float color[4]);
+    void DrawSelection(CaptureSource const& source, bool cropMode);
 
     std::shared_ptr<GraphicsDevice> m_graphics;
     HWND m_hwnd{};
@@ -60,18 +64,14 @@ private:
     Microsoft::WRL::ComPtr<IDXGISwapChain1> m_swapChain;
     Microsoft::WRL::ComPtr<ID3D11RenderTargetView> m_renderTargetView;
     Microsoft::WRL::ComPtr<ID3D11VertexShader> m_vertexShader;
-    Microsoft::WRL::ComPtr<ID3D11PixelShader> m_pixelShader;
+    Microsoft::WRL::ComPtr<ID3D11PixelShader> m_texturePixelShader;
+    Microsoft::WRL::ComPtr<ID3D11PixelShader> m_colorPixelShader;
     Microsoft::WRL::ComPtr<ID3D11Buffer> m_transformBuffer;
+    Microsoft::WRL::ComPtr<ID3D11Buffer> m_colorBuffer;
     Microsoft::WRL::ComPtr<ID3D11SamplerState> m_sampler;
     Microsoft::WRL::ComPtr<ID3D11RasterizerState> m_rasterizerState;
     Microsoft::WRL::ComPtr<ID3D11BlendState> m_blendState;
     Microsoft::WRL::ComPtr<ID3D11DepthStencilState> m_depthStencilState;
-
-    Microsoft::WRL::ComPtr<ID2D1DeviceContext2> m_d2dContext;
-    Microsoft::WRL::ComPtr<ID2D1Bitmap1> m_targetBitmap;
-    Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_selectionBrush;
-    Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_cropBrush;
-    Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> m_handleFillBrush;
 
     std::unordered_map<const CaptureSource*, TextureCacheEntry> m_textureCache;
 
