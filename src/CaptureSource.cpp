@@ -137,7 +137,7 @@ void CaptureSource::EnsureCopyTexture(ID3D11Texture2D* source, uint32_t width, u
     desc.SampleDesc.Count = 1;
     desc.SampleDesc.Quality = 0;
     desc.Usage = D3D11_USAGE_DEFAULT;
-    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
     desc.CPUAccessFlags = 0;
     desc.MiscFlags = 0;
 
@@ -198,17 +198,16 @@ void CaptureSource::OnFrameArrived(
 
         EnsureCopyTexture(sourceTexture.Get(), width, height);
 
-        ComPtr<ID3D11Texture2D> destination;
+        // The texture remains locked through the GPU copy. The renderer takes
+        // the same lock while it binds/draws the SRV, preventing a read/write
+        // hazard on the immediate D3D11 context.
         {
             std::scoped_lock lock(m_mutex);
-            destination = m_copyTexture;
-        }
-
-        if (destination) {
-            m_graphics->D3DContext()->CopyResource(destination.Get(), sourceTexture.Get());
-            m_graphics->D3DContext()->Flush();
-            m_lastAcceptedFrame = now;
-            m_frameCount.fetch_add(1, std::memory_order_relaxed);
+            if (m_copyTexture) {
+                m_graphics->D3DContext()->CopyResource(m_copyTexture.Get(), sourceTexture.Get());
+                m_lastAcceptedFrame = now;
+                m_frameCount.fetch_add(1, std::memory_order_relaxed);
+            }
         }
 
         frame.Close();
