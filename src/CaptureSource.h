@@ -5,6 +5,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <utility>
 
 #include <d3d11_4.h>
 #include <wrl/client.h>
@@ -45,6 +46,26 @@ public:
     void SetMaxFps(uint32_t fps) noexcept;
 
     CaptureFrameSnapshot Snapshot() const;
+
+    // Run a very short renderer callback while the capture texture is locked.
+    // This prevents the capture thread from CopyResource'ing into a texture at
+    // the same moment that D3D11 is binding/sampling it as an SRV.
+    template <typename Fn>
+    bool WithFrame(Fn&& fn) const {
+        std::scoped_lock lock(m_mutex);
+        if (!m_copyTexture || m_width == 0 || m_height == 0) {
+            return false;
+        }
+
+        CaptureFrameSnapshot snapshot;
+        snapshot.texture = m_copyTexture;
+        snapshot.width = m_width;
+        snapshot.height = m_height;
+        snapshot.generation = m_generation;
+        std::forward<Fn>(fn)(snapshot);
+        return true;
+    }
+
     std::wstring Name() const;
     bool IsClosed() const noexcept { return m_closed.load(); }
     uint64_t FrameCount() const noexcept { return m_frameCount.load(std::memory_order_relaxed); }
