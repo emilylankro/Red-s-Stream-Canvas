@@ -63,6 +63,9 @@ private:
     Microsoft::WRL::ComPtr<ID3D11PixelShader> m_pixelShader;
     Microsoft::WRL::ComPtr<ID3D11Buffer> m_transformBuffer;
     Microsoft::WRL::ComPtr<ID3D11SamplerState> m_sampler;
+    Microsoft::WRL::ComPtr<ID3D11RasterizerState> m_rasterizerState;
+    Microsoft::WRL::ComPtr<ID3D11BlendState> m_blendState;
+    Microsoft::WRL::ComPtr<ID3D11DepthStencilState> m_depthStencilState;
 
     Microsoft::WRL::ComPtr<ID2D1DeviceContext2> m_d2dContext;
     Microsoft::WRL::ComPtr<ID2D1Bitmap1> m_targetBitmap;
